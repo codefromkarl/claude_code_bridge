@@ -4,7 +4,7 @@
 
 **基于终端分屏的 Claude & Codex & Gemini 丝滑协作工具**
 
-**打造真实的大模型专家协作团队，给 Claude Code / Codex / Gemini 配上"不会遗忘"的搭档**
+**打造真实的大模型专家协作团队，给 Claude Code / Codex / Gemini / OpenCode 配上"不会遗忘"的搭档**
 
 <p>
   <img src="https://img.shields.io/badge/交互皆可见-096DD9?style=for-the-badge" alt="交互皆可见">
@@ -102,7 +102,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 ```bash
 ccb up codex            # 启动 Codex
 ccb up gemini           # 启动 Gemini
+ccb up opencode         # 启动 OpenCode
 ccb up codex gemini     # 同时启动两个
+ccb up codex gemini opencode  # 同时启动三个
+ccb-layout              # 启动 2x2 四 AI 布局（Codex+Gemini+OpenCode）
 ```
 
 ### 常用参数
@@ -338,6 +341,6 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
 📧 Email: bfly123@126.com
 💬 WeChat: seemseam-com
 
-<img src="assets/wechat.jpg" alt="微信群" width="300">
+<img src="assets/weixin.png" alt="微信群" width="300">
 
 </div>

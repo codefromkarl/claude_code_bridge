@@ -303,6 +303,8 @@ class AILauncher:
             return self._start_codex(tmux_session)
         elif provider == "gemini":
             return self._start_gemini(tmux_session)
+        elif provider == "opencode":
+            return self._start_opencode(tmux_session)
         else:
             print(f"❌ {t('unknown_provider', provider=provider)}")
             return False
@@ -315,15 +317,29 @@ class AILauncher:
         keep_open = os.environ.get("CODEX_WEZTERM_KEEP_OPEN", "1").lower() not in {"0", "false", "no", "off"}
         if keep_open:
             start_cmd = _build_keep_open_cmd(provider, start_cmd)
-        # Layout: first backend splits to the right of current pane, subsequent backends stack below
-        # the first backend pane to form a right-side column (top/bottom).
-        direction = "right" if not self.wezterm_panes else "bottom"
-        parent_pane = None
-        if direction == "bottom":
-            try:
-                parent_pane = next(iter(self.wezterm_panes.values()))
-            except StopIteration:
-                parent_pane = None
+        want_grid = {"codex", "gemini", "opencode"}.issubset(set(self.providers))
+        current_pane = os.environ.get("WEZTERM_PANE")
+        if want_grid and current_pane:
+            # 2x2 grid with current pane as top-left:
+            # codex -> top-right, gemini -> bottom-left, opencode -> bottom-right.
+            if not self.wezterm_panes:
+                direction = "right"
+                parent_pane = current_pane
+            elif provider == "gemini":
+                direction = "bottom"
+                parent_pane = current_pane
+            else:
+                direction = "bottom"
+                parent_pane = self.wezterm_panes.get("codex") or next(iter(self.wezterm_panes.values()))
+        else:
+            # Legacy layout: right column stack (top/bottom).
+            direction = "right" if not self.wezterm_panes else "bottom"
+            parent_pane = None
+            if direction == "bottom":
+                try:
+                    parent_pane = next(iter(self.wezterm_panes.values()))
+                except StopIteration:
+                    parent_pane = None
 
         backend = WeztermBackend()
         pane_id = backend.create_pane(start_cmd, str(Path.cwd()), direction=direction, percent=50, parent_pane=parent_pane)
@@ -334,8 +350,10 @@ class AILauncher:
             output_fifo = runtime / "output.fifo"
             # WezTerm mode injects text via pane, no strong FIFO dependency; Windows/WSL may not support mkfifo
             self._write_codex_session(runtime, None, input_fifo, output_fifo, pane_id=pane_id)
-        else:
+        elif provider == "gemini":
             self._write_gemini_session(runtime, None, pane_id=pane_id)
+        else:
+            self._write_opencode_session(runtime, None, pane_id=pane_id)
 
         print(f"✅ {t('started_backend', provider=provider.capitalize(), terminal='wezterm pane', pane_id=pane_id)}")
         return True
@@ -355,14 +373,26 @@ class AILauncher:
                 f"read -r _; "
                 f"exit $code"
             )
-        # Layout: first backend splits to the right of current pane, subsequent backends stack below
-        direction = "right" if not self.iterm2_panes else "bottom"
-        parent_pane = None
-        if direction == "bottom":
-            try:
-                parent_pane = next(iter(self.iterm2_panes.values()))
-            except StopIteration:
-                parent_pane = None
+        want_grid = {"codex", "gemini", "opencode"}.issubset(set(self.providers))
+        current_pane = os.environ.get("ITERM_SESSION_ID")
+        if want_grid and current_pane:
+            if not self.iterm2_panes:
+                direction = "right"
+                parent_pane = current_pane
+            elif provider == "gemini":
+                direction = "bottom"
+                parent_pane = current_pane
+            else:
+                direction = "bottom"
+                parent_pane = self.iterm2_panes.get("codex") or next(iter(self.iterm2_panes.values()))
+        else:
+            direction = "right" if not self.iterm2_panes else "bottom"
+            parent_pane = None
+            if direction == "bottom":
+                try:
+                    parent_pane = next(iter(self.iterm2_panes.values()))
+                except StopIteration:
+                    parent_pane = None
 
         backend = Iterm2Backend()
         pane_id = backend.create_pane(start_cmd, str(Path.cwd()), direction=direction, percent=50, parent_pane=parent_pane)
@@ -373,8 +403,10 @@ class AILauncher:
             output_fifo = runtime / "output.fifo"
             # iTerm2 mode injects text via pane, no strong FIFO dependency
             self._write_codex_session(runtime, None, input_fifo, output_fifo, pane_id=pane_id)
-        else:
+        elif provider == "gemini":
             self._write_gemini_session(runtime, None, pane_id=pane_id)
+        else:
+            self._write_opencode_session(runtime, None, pane_id=pane_id)
 
         print(f"✅ {t('started_backend', provider=provider.capitalize(), terminal='iterm2 session', pane_id=pane_id)}")
         return True
@@ -512,7 +544,7 @@ class AILauncher:
         return None, False
 
     def _build_codex_start_cmd(self) -> str:
-        cmd = "codex -c disable_paste_burst=true --full-auto" if self.auto else "codex -c disable_paste_burst=true"
+        cmd = "codex -c disable_paste_burst=true --dangerously-bypass-approvals-and-sandbox" if self.auto else "codex -c disable_paste_burst=true"
         codex_resumed = False
         if self.resume:
             session_id, has_history = self._get_latest_codex_session_id()
@@ -581,6 +613,8 @@ class AILauncher:
             ping_script = self.script_dir / "bin" / "cping"
         elif provider == "gemini":
             ping_script = self.script_dir / "bin" / "gping"
+        elif provider == "opencode":
+            ping_script = self.script_dir / "bin" / "oping"
         else:
             return False
 
@@ -622,7 +656,13 @@ class AILauncher:
             return self._build_codex_start_cmd()
         elif provider == "gemini":
             return self._build_gemini_start_cmd()
+        elif provider == "opencode":
+            return self._build_opencode_start_cmd()
         return ""
+
+    def _build_opencode_start_cmd(self) -> str:
+        # OpenCode CLI (TUI). Allow override via env for custom wrappers.
+        return (os.environ.get("OPENCODE_START_CMD") or "opencode").strip() or "opencode"
 
     def _start_codex(self, tmux_session: str) -> bool:
         runtime = self.runtime_dir / "codex"
@@ -739,6 +779,37 @@ exec tmux attach -t "$TMUX_SESSION"
         print(f"✅ {t('started_backend', provider='Gemini', terminal='tmux', pane_id=tmux_session)}")
         return True
 
+    def _start_opencode(self, tmux_session: str) -> bool:
+        runtime = self.runtime_dir / "opencode"
+        runtime.mkdir(parents=True, exist_ok=True)
+
+        start_cmd = self._build_opencode_start_cmd()
+
+        script_file = runtime / "wrapper.sh"
+
+        self._write_opencode_session(runtime, tmux_session)
+
+        wrapper = f'''#!/bin/bash
+\tcd "{os.getcwd()}"
+\ttmux new-session -d -s "{tmux_session}" 2>/dev/null || true
+\ttmux send-keys -t "{tmux_session}" "{start_cmd}" Enter
+\texec tmux attach -t "{tmux_session}"
+\t'''
+        script_file.write_text(wrapper)
+        os.chmod(script_file, 0o755)
+
+        terminal = self._detect_launch_terminal()
+        if terminal == "tmux":
+            if self._launch_script_in_macos_terminal(script_file):
+                pass
+            else:
+                subprocess.run(["tmux", "new-session", "-d", "-s", f"launcher-{tmux_session}", str(script_file)], check=True)
+        elif terminal:
+            subprocess.Popen([terminal, "-e", str(script_file)])
+
+        print(f"✅ {t('started_backend', provider='OpenCode', terminal='tmux', pane_id=tmux_session)}")
+        return True
+
     def _write_codex_session(self, runtime, tmux_session, input_fifo, output_fifo, pane_id=None):
         session_file = Path.cwd() / ".codex-session"
 
@@ -779,6 +850,32 @@ exec tmux attach -t "$TMUX_SESSION"
         session_file = Path.cwd() / ".gemini-session"
 
         # Pre-check permissions
+        writable, reason, fix = check_session_writable(session_file)
+        if not writable:
+            print(f"❌ Cannot write {session_file.name}: {reason}", file=sys.stderr)
+            print(f"💡 Fix: {fix}", file=sys.stderr)
+            return False
+
+        data = {
+            "session_id": self.session_id,
+            "runtime_dir": str(runtime),
+            "terminal": self.terminal_type,
+            "tmux_session": tmux_session,
+            "pane_id": pane_id,
+            "work_dir": str(Path.cwd()),
+            "active": True,
+            "started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        ok, err = safe_write_session(session_file, json.dumps(data, ensure_ascii=False, indent=2))
+        if not ok:
+            print(err, file=sys.stderr)
+            return False
+        return True
+
+    def _write_opencode_session(self, runtime, tmux_session, pane_id=None):
+        session_file = Path.cwd() / ".opencode-session"
+
         writable, reason, fix = check_session_writable(session_file)
         if not writable:
             print(f"❌ Cannot write {session_file.name}: {reason}", file=sys.stderr)
@@ -920,6 +1017,18 @@ exec tmux attach -t "$TMUX_SESSION"
             else:
                 env["GEMINI_TMUX_SESSION"] = self.tmux_sessions.get("gemini", "")
 
+        if "opencode" in self.providers:
+            runtime = self.runtime_dir / "opencode"
+            env["OPENCODE_SESSION_ID"] = self.session_id
+            env["OPENCODE_RUNTIME_DIR"] = str(runtime)
+            env["OPENCODE_TERMINAL"] = self.terminal_type
+            if self.terminal_type == "wezterm":
+                env["OPENCODE_WEZTERM_PANE"] = self.wezterm_panes.get("opencode", "")
+            elif self.terminal_type == "iterm2":
+                env["OPENCODE_ITERM2_PANE"] = self.iterm2_panes.get("opencode", "")
+            else:
+                env["OPENCODE_TMUX_SESSION"] = self.tmux_sessions.get("opencode", "")
+
         try:
             claude_cmd = self._find_claude_cmd()
         except FileNotFoundError as e:
@@ -946,6 +1055,8 @@ exec tmux attach -t "$TMUX_SESSION"
             print("   cask/cask-w/cping/cpend - Codex communication")
         if "gemini" in self.providers:
             print("   gask/gask-w/gping/gpend - Gemini communication")
+        if "opencode" in self.providers:
+            print("   oask/oask-w/oping/opend - OpenCode communication")
         print()
         print(f"Executing: {' '.join(cmd)}")
 
@@ -979,7 +1090,7 @@ exec tmux attach -t "$TMUX_SESSION"
                 subprocess.run(["tmux", "kill-session", "-t", tmux_session], stderr=subprocess.DEVNULL)
                 subprocess.run(["tmux", "kill-session", "-t", f"launcher-{tmux_session}"], stderr=subprocess.DEVNULL)
 
-        for session_file in [Path.cwd() / ".codex-session", Path.cwd() / ".gemini-session", Path.cwd() / ".claude-session"]:
+        for session_file in [Path.cwd() / ".codex-session", Path.cwd() / ".gemini-session", Path.cwd() / ".opencode-session", Path.cwd() / ".claude-session"]:
             if session_file.exists():
                 try:
                     data = self._read_json_file(session_file)
@@ -1012,7 +1123,7 @@ exec tmux attach -t "$TMUX_SESSION"
         providers = list(self.providers)
         if self.terminal_type in ("wezterm", "iterm2"):
             # Stable layout: codex on top, gemini on bottom (when both are present).
-            order = {"codex": 0, "gemini": 1}
+            order = {"codex": 0, "gemini": 1, "opencode": 2}
             providers.sort(key=lambda p: order.get(p, 99))
 
         for provider in providers:
@@ -1058,7 +1169,7 @@ def cmd_up(args):
 
 
 def cmd_status(args):
-    providers = args.providers or ["codex", "gemini"]
+    providers = args.providers or ["codex", "gemini", "opencode"]
     results = {}
 
     for provider in providers:
@@ -1106,7 +1217,7 @@ def cmd_status(args):
 
 
 def cmd_kill(args):
-    providers = args.providers or ["codex", "gemini"]
+    providers = args.providers or ["codex", "gemini", "opencode"]
 
     for provider in providers:
         session_file = Path.cwd() / f".{provider}-session"
@@ -1656,22 +1767,22 @@ def main():
 
     # up subcommand
     up_parser = subparsers.add_parser("up", help="Start AI backends")
-    up_parser.add_argument("providers", nargs="*", choices=["codex", "gemini"], help="Backends to start")
+    up_parser.add_argument("providers", nargs="*", choices=["codex", "gemini", "opencode"], help="Backends to start")
     up_parser.add_argument("-r", "--resume", "--restore", action="store_true", help="Resume context")
     up_parser.add_argument("-a", "--auto", action="store_true", help="Full auto permission mode")
     up_parser.add_argument("--no-claude", action="store_true", help="Don't start Claude main window")
 
     # status subcommand
     status_parser = subparsers.add_parser("status", help="Check status")
-    status_parser.add_argument("providers", nargs="*", default=[], help="Backends to check (codex/gemini)")
+    status_parser.add_argument("providers", nargs="*", default=[], help="Backends to check (codex/gemini/opencode)")
 
     # kill subcommand
     kill_parser = subparsers.add_parser("kill", help="Terminate session")
-    kill_parser.add_argument("providers", nargs="*", default=[], help="Backends to terminate (codex/gemini)")
+    kill_parser.add_argument("providers", nargs="*", default=[], help="Backends to terminate (codex/gemini/opencode)")
 
     # restore subcommand
     restore_parser = subparsers.add_parser("restore", help="Restore/attach session")
-    restore_parser.add_argument("providers", nargs="*", default=[], help="Backends to restore (codex/gemini)")
+    restore_parser.add_argument("providers", nargs="*", default=[], help="Backends to restore (codex/gemini/opencode)")
 
     # update subcommand
     update_parser = subparsers.add_parser("update", help="Update to latest version")

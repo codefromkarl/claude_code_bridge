@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""
+opend - View latest OpenCode reply
+"""
+
+import os
+import sys
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+from compat import setup_windows_encoding
+
+setup_windows_encoding()
+
+from i18n import t
+
+try:
+    from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
+    from opencode_comm import OpenCodeLogReader
+except ImportError as exc:
+    print(f"Import failed: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+
+def _debug_enabled() -> bool:
+    return (os.environ.get("CCB_DEBUG") in ("1", "true", "yes")) or (os.environ.get("OPEND_DEBUG") in ("1", "true", "yes"))
+
+
+def main(argv: list[str]) -> int:
+    try:
+        if len(argv) > 1 and argv[1] in ("-h", "--help"):
+            print("Usage: opend", file=sys.stderr)
+            return EXIT_OK
+
+        reader = OpenCodeLogReader()
+        message = reader.latest_message()
+        if not message:
+            print(t("no_reply_available", provider="OpenCode"), file=sys.stderr)
+            return EXIT_NO_REPLY
+        print(message)
+        return EXIT_OK
+    except Exception as exc:
+        if _debug_enabled():
+            import traceback
+
+            traceback.print_exc()
+        print(f"[ERROR] {t('execution_failed', error=exc)}", file=sys.stderr)
+        return EXIT_ERROR
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
+

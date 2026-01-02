@@ -25,11 +25,18 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:CCB_START_MARKER = "<!-- CCB_CONFIG_START -->"
 $script:CCB_END_MARKER = "<!-- CCB_CONFIG_END -->"
 
-$script:SCRIPTS_TO_LINK = @("ccb", "cask", "cask-w", "cpend", "cping", "gask", "gask-w", "gpend", "gping")
+$script:SCRIPTS_TO_LINK = @(
+  "ccb",
+  "cask", "cask-w", "cpend", "cping",
+  "gask", "gask-w", "gpend", "gping",
+  "oask", "oask-w", "opend", "oping",
+  "ccb-layout"
+)
 
 $script:CLAUDE_MARKDOWN = @(
   "cask.md", "cask-w.md", "cpend.md", "cping.md",
-  "gask.md", "gask-w.md", "gpend.md", "gping.md"
+  "gask.md", "gask-w.md", "gpend.md", "gping.md",
+  "oask.md", "oask-w.md", "opend.md", "oping.md"
 )
 
 $script:LEGACY_SCRIPTS = @(
@@ -221,7 +228,13 @@ function Install-Native {
     }
   }
 
-  $scripts = @("ccb", "cask", "cask-w", "cping", "cpend", "gask", "gask-w", "gping", "gpend")
+  $scripts = @(
+    "ccb",
+    "cask", "cask-w", "cping", "cpend",
+    "gask", "gask-w", "gping", "gpend",
+    "oask", "oask-w", "oping", "opend",
+    "ccb-layout"
+  )
 
   # In MSYS/Git-Bash, invoking the script file directly will honor the shebang.
   # Windows typically has `python` but not `python3`, so rewrite shebangs for compatibility.
@@ -267,6 +280,8 @@ function Install-Native {
   Write-Host "Quick start:"
   Write-Host "  ccb up codex    # Start with Codex backend"
   Write-Host "  ccb up gemini   # Start with Gemini backend"
+  Write-Host "  ccb up opencode # Start with OpenCode backend"
+  Write-Host "  ccb-layout      # Start 2x2 layout (Codex+Gemini+OpenCode)"
 }
 
 function Install-ClaudeConfig {
@@ -363,12 +378,56 @@ Examples:
 - "ask gemini to review this design" -> ``Bash(gask "...", run_in_background=true)``, END turn (complex)
 - "is gemini alive" -> gping
 - "view gemini reply" -> gpend
+
+## OpenCode Collaboration Rules
+OpenCode is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with OpenCode:
+
+Fast path (minimize latency):
+- If the user message starts with any of: ``@opencode``, ``opencode:``, ``ask opencode``, ``let opencode``, ``/oask`` then immediately run based on complexity.
+- If user message is only the prefix (no content), ask a 1-line clarification for what to send.
+
+Trigger conditions (any match):
+- User mentions opencode/OpenCode with questioning/requesting tone
+- User wants opencode to do something, give advice, or help review
+- User asks about opencode's status or previous reply
+
+Command selection:
+- Send question -> ``Bash(oask "<question>", run_in_background=true)``, tell user "OpenCode processing (task: xxx)" then END your turn
+- Check connectivity -> ``oping``
+
+IMPORTANT RESTRICTIONS:
+- NEVER use opend/oask-w unless user EXPLICITLY requests
+- After oask, ONLY wait for bash-notification to get results
+- Do NOT try to fetch results yourself
 <!-- CCB_CONFIG_END -->
 "@
 
   if (Test-Path $claudeMd) {
     $content = Get-Content -Raw $claudeMd
-    if ($content -notlike "*Codex Collaboration Rules*") {
+
+    if ($content -match [regex]::Escape($script:CCB_START_MARKER)) {
+      # Replace existing CCB config block (keep rest of file intact)
+      $pattern = '(?s)<!-- CCB_CONFIG_START -->.*?<!-- CCB_CONFIG_END -->'
+      $newContent = [regex]::Replace($content, $pattern, $codexRules)
+      $newContent | Out-File -Encoding UTF8 -FilePath $claudeMd
+      Write-Host "Updated CLAUDE.md with collaboration rules"
+    } elseif ($content -match '##\s+(Codex|Gemini|OpenCode)\s+Collaboration Rules' -or $content -match '##\s+(Codex|Gemini|OpenCode)\s+协作规则') {
+      # Remove legacy rule blocks then append the new unified block
+      $patterns = @(
+        '(?s)## Codex Collaboration Rules.*?(?=\n## (?!Gemini)|\Z)',
+        '(?s)## Codex 协作规则.*?(?=\n## |\Z)',
+        '(?s)## Gemini Collaboration Rules.*?(?=\n## |\Z)',
+        '(?s)## Gemini 协作规则.*?(?=\n## |\Z)',
+        '(?s)## OpenCode Collaboration Rules.*?(?=\n## |\Z)',
+        '(?s)## OpenCode 协作规则.*?(?=\n## |\Z)'
+      )
+      foreach ($p in $patterns) {
+        $content = [regex]::Replace($content, $p, '')
+      }
+      $content = ($content.TrimEnd() + "`n")
+      ($content + $codexRules + "`n") | Out-File -Encoding UTF8 -FilePath $claudeMd
+      Write-Host "Updated CLAUDE.md with collaboration rules"
+    } else {
       Add-Content -Path $claudeMd -Value $codexRules
       Write-Host "Updated CLAUDE.md with collaboration rules"
     }
@@ -379,7 +438,8 @@ Examples:
 
   $allowList = @(
     "Bash(cask:*)", "Bash(cask-w:*)", "Bash(cpend)", "Bash(cping)",
-    "Bash(gask:*)", "Bash(gask-w:*)", "Bash(gpend)", "Bash(gping)"
+    "Bash(gask:*)", "Bash(gask-w:*)", "Bash(gpend)", "Bash(gping)",
+    "Bash(oask:*)", "Bash(oask-w:*)", "Bash(opend)", "Bash(oping)"
   )
 
   if (Test-Path $settingsJson) {

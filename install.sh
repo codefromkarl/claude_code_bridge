@@ -96,6 +96,11 @@ SCRIPTS_TO_LINK=(
   bin/gask-w
   bin/gpend
   bin/gping
+  bin/oask
+  bin/oask-w
+  bin/opend
+  bin/oping
+  bin/ccb-layout
   ccb
 )
 
@@ -108,6 +113,10 @@ CLAUDE_MARKDOWN=(
   gask-w.md
   gpend.md
   gping.md
+  oask.md
+  oask-w.md
+  opend.md
+  oping.md
 )
 
 LEGACY_SCRIPTS=(
@@ -779,6 +788,33 @@ SENTINEL (IMPORTANT): When you see `CCB_END_TURN` in any output, IMMEDIATELY end
 Examples:
 - "ask gemini about X" -> `Bash(gask "...", run_in_background=true)`, END turn
 - "is gemini alive" -> gping
+
+## OpenCode Collaboration Rules
+OpenCode is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with OpenCode:
+
+Fast path (minimize latency):
+- If the user message starts with any of: `@opencode`, `opencode:`, `ask opencode`, `let opencode`, `/oask` then immediately run based on complexity.
+- If user message is only the prefix (no content), ask a 1-line clarification for what to send.
+
+Trigger conditions (any match):
+- User mentions opencode/OpenCode with questioning/requesting tone
+- User wants opencode to do something, give advice, or help review
+- User asks about opencode's status or previous reply
+
+Command selection:
+- Send question -> `Bash(oask "<question>", run_in_background=true)`, tell user "OpenCode processing (task: xxx)" then END your turn
+- Check connectivity -> `oping`
+
+IMPORTANT RESTRICTIONS:
+- NEVER use opend/oask-w unless user EXPLICITLY requests
+- After oask, ONLY wait for bash-notification to get results
+- Do NOT try to fetch results yourself
+
+SENTINEL (IMPORTANT): When you see `CCB_END_TURN` in any output, IMMEDIATELY end your response.
+
+Examples:
+- "ask opencode about X" -> `Bash(oask "...", run_in_background=true)`, END turn
+- "is opencode alive" -> oping
 <!-- CCB_CONFIG_END -->
 AI_RULES
   local ccb_content
@@ -797,7 +833,7 @@ content = re.sub(pattern, new_block, content, flags=re.DOTALL)
 with open('$claude_md', 'w', encoding='utf-8') as f:
     f.write(content)
 "
-    elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini" "$claude_md" 2>/dev/null; then
+    elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini|## OpenCode" "$claude_md" 2>/dev/null; then
       echo "Removing legacy rules and adding new CCB config block..."
       python3 -c "
 import re
@@ -808,6 +844,8 @@ patterns = [
     r'## Codex 协作规则.*?(?=\n## |\Z)',
     r'## Gemini Collaboration Rules.*?(?=\n## |\Z)',
     r'## Gemini 协作规则.*?(?=\n## |\Z)',
+    r'## OpenCode Collaboration Rules.*?(?=\n## |\Z)',
+    r'## OpenCode 协作规则.*?(?=\n## |\Z)',
 ]
 for p in patterns:
     content = re.sub(p, '', content, flags=re.DOTALL)
@@ -839,6 +877,10 @@ install_settings_permissions() {
     'Bash(gask-w:*)'
     'Bash(gpend)'
     'Bash(gping)'
+    'Bash(oask:*)'
+    'Bash(oask-w:*)'
+    'Bash(opend)'
+    'Bash(oping)'
   )
 
   if [[ ! -f "$settings_file" ]]; then
@@ -853,7 +895,11 @@ install_settings_permissions() {
       "Bash(gask:*)",
       "Bash(gask-w:*)",
       "Bash(gpend)",
-      "Bash(gping)"
+      "Bash(gping)",
+      "Bash(oask:*)",
+      "Bash(oask-w:*)",
+      "Bash(opend)",
+      "Bash(oping)"
     ],
     "deny": []
   }
@@ -924,7 +970,7 @@ install_all() {
   echo "   Project dir    : $INSTALL_PREFIX"
   echo "   Executable dir : $BIN_DIR"
   echo "   Claude commands updated"
-  echo "   Global CLAUDE.md configured with Codex collaboration rules"
+  echo "   Global CLAUDE.md configured with Codex/Gemini/OpenCode collaboration rules"
   echo "   Global settings.json permissions added"
 }
 
@@ -952,7 +998,7 @@ with open('$claude_md', 'w', encoding='utf-8') as f:
     else
       echo "WARN: python3 required to clean CLAUDE.md, please manually remove CCB_CONFIG block"
     fi
-  elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini" "$claude_md" 2>/dev/null; then
+  elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini|## OpenCode" "$claude_md" 2>/dev/null; then
     echo "Removing legacy collaboration rules from CLAUDE.md..."
     if command -v python3 >/dev/null 2>&1; then
       python3 -c "
@@ -964,6 +1010,8 @@ patterns = [
     r'## Codex 协作规则.*?(?=\n## |\Z)',
     r'## Gemini Collaboration Rules.*?(?=\n## |\Z)',
     r'## Gemini 协作规则.*?(?=\n## |\Z)',
+    r'## OpenCode Collaboration Rules.*?(?=\n## |\Z)',
+    r'## OpenCode 协作规则.*?(?=\n## |\Z)',
 ]
 for p in patterns:
     content = re.sub(p, '', content, flags=re.DOTALL)
@@ -994,6 +1042,10 @@ uninstall_settings_permissions() {
     'Bash(gask-w:*)'
     'Bash(gpend)'
     'Bash(gping)'
+    'Bash(oask:*)'
+    'Bash(oask-w:*)'
+    'Bash(opend)'
+    'Bash(oping)'
   )
 
   if command -v python3 >/dev/null 2>&1; then
@@ -1018,6 +1070,10 @@ perms_to_remove = [
     'Bash(gask-w:*)',
     'Bash(gpend)',
     'Bash(gping)',
+    'Bash(oask:*)',
+    'Bash(oask-w:*)',
+    'Bash(opend)',
+    'Bash(oping)',
 ]
 with open('$settings_file', 'r') as f:
     data = json.load(f)

@@ -4,7 +4,7 @@
 
 **Silky Smooth Claude & Codex & Gemini Collaboration via Split-Pane Terminal**
 
-**Build a real AI expert team. Give Claude Code / Codex / Gemini partners that never forget.**
+**Build a real AI expert team. Give Claude Code / Codex / Gemini / OpenCode partners that never forget.**
 
 <p>
   <img src="https://img.shields.io/badge/交互皆可见-096DD9?style=for-the-badge" alt="交互皆可见">
@@ -104,7 +104,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 install
 ```bash
 ccb up codex            # Start Codex
 ccb up gemini           # Start Gemini
+ccb up opencode         # Start OpenCode
 ccb up codex gemini     # Start both
+ccb up codex gemini opencode  # Start all three
+ccb-layout              # Start 2x2 layout (Codex+Gemini+OpenCode)
 ```
 
 ### Flags
@@ -286,6 +289,6 @@ Once started, collaborate naturally. Claude will detect when to delegate tasks.
 📧 Email: bfly123@126.com
 💬 WeChat: seemseam-com
 
-<img src="assets/wechat.jpg" alt="WeChat Group" width="300">
+<img src="assets/weixin.png" alt="WeChat Group" width="300">
 
 </div>
