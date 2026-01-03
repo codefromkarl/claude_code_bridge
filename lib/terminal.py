@@ -7,7 +7,10 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
+import threading
 import time
+import sys
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
@@ -129,30 +132,185 @@ class TerminalBackend(ABC):
     def activate(self, pane_id: str) -> None: ...
     @abstractmethod
     def create_pane(self, cmd: str, cwd: str, direction: str = "right", percent: int = 50, parent_pane: Optional[str] = None) -> str: ...
+    @abstractmethod
+    def capture_pane(self, pane_id: str, lines: int = 20) -> Optional[str]: ...
+
+
+class TmuxRunner:
+    def run_batched(self, cmds: list[list[str]], *, check: bool = True) -> None: ...
+
+
+class SubprocessTmuxRunner(TmuxRunner):
+    def run_batched(self, cmds: list[list[str]], *, check: bool = True) -> None:
+        if not cmds:
+            return
+        argv: list[str] = ["tmux"]
+        for idx, cmd in enumerate(cmds):
+            if idx:
+                argv.append(";")
+            argv.extend(cmd)
+        subprocess.run(argv, check=check)
+
+
+class TmuxControlClient(TmuxRunner):
+    """
+    Persistent tmux client using control mode (`tmux -C`).
+
+    This avoids spawning a new `tmux` process per operation; it's best-effort and falls back to
+    subprocess mode on any failure.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._proc = subprocess.Popen(
+            ["tmux", "-C"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+
+    def is_alive(self) -> bool:
+        return self._proc.poll() is None
+
+    def close(self) -> None:
+        with self._lock:
+            if self._proc.poll() is not None:
+                return
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
+        try:
+            self._proc.wait(timeout=0.2)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _format_cmd(args: list[str]) -> str:
+        return " ".join(shlex.quote(a) for a in args)
+
+    def run_batched(self, cmds: list[list[str]], *, check: bool = True) -> None:
+        if not cmds:
+            return
+        if self._proc.poll() is not None:
+            raise RuntimeError("tmux control client not running")
+        if not self._proc.stdin:
+            raise RuntimeError("tmux control client has no stdin")
+
+        with self._lock:
+            for cmd in cmds:
+                line = self._format_cmd(cmd)
+                self._proc.stdin.write(line + "\n")
+            self._proc.stdin.flush()
 
 
 class TmuxBackend(TerminalBackend):
+    _control_client: "TmuxControlClient | None" = None
+
+    @staticmethod
+    def _bool_env(name: str, default: bool = False) -> bool:
+        raw = os.environ.get(name)
+        if raw is None:
+            return default
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+
+    @classmethod
+    def _tmux_tmp_dir(cls) -> Path:
+        override = (os.environ.get("CCB_TMUX_TMPDIR") or "").strip()
+        if override:
+            base = Path(override).expanduser()
+        else:
+            if sys.platform == "linux":
+                shm = Path("/dev/shm")
+                if shm.is_dir() and os.access(str(shm), os.W_OK):
+                    base = shm / "ccb"
+                else:
+                    base = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp") / "ccb"
+            else:
+                base = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()) / "ccb"
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+
+    @classmethod
+    def _runner(cls) -> "TmuxRunner":
+        if not cls._bool_env("CCB_TMUX_PERSIST", False):
+            return SubprocessTmuxRunner()
+        if cls._control_client and cls._control_client.is_alive():
+            return cls._control_client
+        try:
+            cls._control_client = TmuxControlClient()
+            return cls._control_client
+        except Exception:
+            cls._control_client = None
+            return SubprocessTmuxRunner()
+
     def send_text(self, session: str, text: str) -> None:
         sanitized = text.replace("\r", "").strip()
         if not sanitized:
             return
+        force_paste = os.environ.get("CCB_FORCE_PASTE", "").lower() in ("1", "true", "yes", "on")
+        runner = self._runner()
         # Fast-path for typical short, single-line commands (fewer tmux subprocess calls).
-        if "\n" not in sanitized and len(sanitized) <= 200:
-            subprocess.run(["tmux", "send-keys", "-t", session, "-l", sanitized], check=True)
-            subprocess.run(["tmux", "send-keys", "-t", session, "Enter"], check=True)
+        if not force_paste and "\n" not in sanitized and len(sanitized) <= 200:
+            runner.run_batched(
+                [
+                    ["send-keys", "-t", session, "-l", sanitized],
+                    ["send-keys", "-t", session, "Enter"],
+                ],
+                check=True,
+            )
             return
 
         buffer_name = f"tb-{os.getpid()}-{int(time.time() * 1000)}"
         encoded = sanitized.encode("utf-8")
-        subprocess.run(["tmux", "load-buffer", "-b", buffer_name, "-"], input=encoded, check=True)
+        tmp_file: Optional[Path] = None
+        cleanup_needed = True
         try:
-            subprocess.run(["tmux", "paste-buffer", "-t", session, "-b", buffer_name, "-p"], check=True)
+            tmp_dir = self._tmux_tmp_dir()
+            with tempfile.NamedTemporaryFile(prefix="ccb-tmux-", suffix=".txt", dir=str(tmp_dir), delete=False) as handle:
+                try:
+                    os.chmod(handle.name, 0o600)
+                except Exception:
+                    pass
+                handle.write(encoded)
+                handle.flush()
+                tmp_file = Path(handle.name)
+
             enter_delay = _env_float("CCB_TMUX_ENTER_DELAY", 0.0)
-            if enter_delay:
+            cmds = [
+                ["load-buffer", "-b", buffer_name, str(tmp_file)],
+                ["paste-buffer", "-t", session, "-b", buffer_name, "-p"],
+            ]
+            if enter_delay <= 0:
+                cmds.append(["send-keys", "-t", session, "Enter"])
+                cmds.append(["delete-buffer", "-b", buffer_name])
+                runner.run_batched(cmds, check=True)
+                cleanup_needed = False
+            else:
+                runner.run_batched(cmds, check=True)
                 time.sleep(enter_delay)
-            subprocess.run(["tmux", "send-keys", "-t", session, "Enter"], check=True)
+                runner.run_batched(
+                    [
+                        ["send-keys", "-t", session, "Enter"],
+                        ["delete-buffer", "-b", buffer_name],
+                    ],
+                    check=True,
+                )
+                cleanup_needed = False
         finally:
-            subprocess.run(["tmux", "delete-buffer", "-b", buffer_name], stderr=subprocess.DEVNULL)
+            if tmp_file:
+                try:
+                    tmp_file.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            if cleanup_needed:
+                # Best-effort cleanup if previous step failed before delete-buffer.
+                try:
+                    subprocess.run(["tmux", "delete-buffer", "-b", buffer_name], stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
 
     def is_alive(self, session: str) -> bool:
         result = subprocess.run(["tmux", "has-session", "-t", session], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -168,6 +326,19 @@ class TmuxBackend(TerminalBackend):
         session_name = f"ai-{int(time.time()) % 100000}-{os.getpid()}"
         subprocess.run(["tmux", "new-session", "-d", "-s", session_name, "-c", cwd, cmd], check=True)
         return session_name
+
+    def capture_pane(self, pane_id: str, lines: int = 20) -> Optional[str]:
+        try:
+            # -p: output to stdout, -S -lines: start from last N lines
+            result = subprocess.run(
+                ["tmux", "capture-pane", "-p", "-t", pane_id, "-S", str(-lines)],
+                capture_output=True, text=True, errors="replace"
+            )
+            if result.returncode == 0:
+                return result.stdout.rstrip()
+        except Exception:
+            pass
+        return None
 
 
 class Iterm2Backend(TerminalBackend):
@@ -260,6 +431,10 @@ class Iterm2Backend(TerminalBackend):
             )
 
         return new_session_id
+    
+    def capture_pane(self, pane_id: str, lines: int = 20) -> Optional[str]:
+        # it2 does not currently support capturing text from session.
+        return None
 
 
 class WeztermBackend(TerminalBackend):
@@ -312,10 +487,11 @@ class WeztermBackend(TerminalBackend):
             return
 
         has_newlines = "\n" in sanitized
+        force_paste = os.environ.get("CCB_FORCE_PASTE", "").lower() in ("1", "true", "yes", "on")
 
         # Single-line: always avoid paste mode (prevents Codex showing "[Pasted Content ...]").
         # Use argv for short text; stdin for long text to avoid command-line length/escaping issues.
-        if not has_newlines:
+        if not has_newlines and not force_paste:
             if len(sanitized) <= 200:
                 subprocess.run(
                     [*self._cli_base_args(), "send-text", "--pane-id", pane_id, "--no-paste", sanitized],
@@ -405,6 +581,25 @@ class WeztermBackend(TerminalBackend):
             return result.stdout.strip()
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"WezTerm split-pane failed:\nCommand: {' '.join(args)}\nStderr: {e.stderr}") from e
+    
+    def capture_pane(self, pane_id: str, lines: int = 20) -> Optional[str]:
+        try:
+            # get-text --lines is not always available or behaves differently, 
+            # checking help might be needed, but 'get-text' usually dumps all.
+            # WezTerm CLI get-text: `wezterm cli get-text --pane-id <ID>`.
+            # There is no --lines limit in older versions, but we can slice in python.
+            result = subprocess.run(
+                [*self._cli_base_args(), "get-text", "--pane-id", pane_id],
+                capture_output=True, text=True, errors="replace"
+            )
+            if result.returncode == 0:
+                text = result.stdout.rstrip()
+                # Manually slice last N lines
+                all_lines = text.splitlines()
+                return "\n".join(all_lines[-lines:])
+        except Exception:
+            pass
+        return None
 
 
 _backend_cache: Optional[TerminalBackend] = None
