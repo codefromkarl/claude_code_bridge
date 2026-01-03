@@ -1,6 +1,7 @@
 """CCB configuration for Windows/WSL backend environment"""
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -81,3 +82,50 @@ def apply_backend_env() -> None:
     prefix = fr"\\wsl.localhost\{distro}" + home.replace("/", "\\")
     os.environ.setdefault("CODEX_SESSION_ROOT", prefix + r"\.codex\sessions")
     os.environ.setdefault("GEMINI_ROOT", prefix + r"\.gemini\tmp")
+
+
+def get_bool_env(name: str, default: bool = False) -> bool:
+    """Get boolean value from environment variable"""
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+def get_int_env(name: str, default: int = 0) -> int:
+    """Get integer value from environment variable"""
+    try:
+        return int(os.environ.get(name, str(default)))
+    except (ValueError, TypeError):
+        return default
+
+
+def get_str_env(name: str, default: str = "") -> str:
+    """Get string value from environment variable"""
+    return os.environ.get(name, default)
+
+
+def can_notify() -> bool:
+    """Check if notifications can be sent (DISPLAY/WAYLAND_DISPLAY present and notify-send available)"""
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False
+    if not shutil.which("notify-send"):
+        return False
+    return True
+
+
+def send_notification(title: str, message: str) -> None:
+    """Send desktop notification if enabled and available"""
+    if not get_bool_env("CCB_NOTIFY", False):
+        return
+    if not can_notify():
+        return
+    try:
+        subprocess.run(
+            ["notify-send", "-a", "CCB", title, message],
+            check=False,
+            timeout=2,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        pass
