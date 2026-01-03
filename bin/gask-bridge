@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""
+gask-bridge - Send message to Gemini via bridge process.
+
+This script uses the same FIFO-based communication pattern as cask-bridge,
+ensuring Claude Code can reliably read results even after CCB_END_TURN.
+
+Usage: gask-bridge <message> [--output FILE] [--timeout SECONDS]
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import json
+from pathlib import Path
+
+script_dir = Path(__file__).resolve().parent
+lib_dir = script_dir.parent / "lib"
+sys.path.insert(0, str(lib_dir))
+
+from ccb_config import apply_backend_env, get_bool_env, get_int_env, get_str_env
+apply_backend_env()
+
+
+def _check_background_mode() -> bool:
+    """Return True when stdout looks like Claude Code run_in_background output capture."""
+    if os.environ.get("CLAUDECODE") != "1":
+        return True
+    if os.environ.get("CCB_ALLOW_FOREGROUND") in ("1", "true", "yes"):
+        return True
+    try:
+        import stat
+        mode = os.fstat(sys.stdout.fileno()).st_mode
+        return stat.S_ISREG(mode) or stat.S_ISSOCK(mode) or stat.S_ISFIFO(mode)
+    except Exception:
+        return False
+
+
+def _generate_marker() -> str:
+    return f"ask-{int(time.time())}-{os.getpid()}"
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("Usage: gask-bridge <message> [--output FILE] [--timeout SECONDS]", file=sys.stderr)
+        return 1
+
+    # Parse arguments
+    message_parts = []
+    output_path = None
+    timeout = 3600.0  # default 1 hour
+
+    i = 1
+    while i < len(sys.argv):
+        arg = sys.argv[i]
+        if arg == "--output" and i + 1 < len(sys.argv):
+            output_path = Path(sys.argv[i + 1]).expanduser()
+            i += 2
+        elif arg == "--timeout" and i + 1 < len(sys.argv):
+            try:
+                timeout = float(sys.argv[i + 1])
+            except ValueError:
+                print(f"Error: --timeout requires a number, got '{sys.argv[i + 1]}'", file=sys.stderr)
+                return 1
+            i += 2
+        elif arg.startswith("-"):
+            i += 1
+        else:
+            message_parts.append(arg)
+            i += 1
+
+    message = " ".join(message_parts).strip()
+    if not message:
+        print("Error: message cannot be empty", file=sys.stderr)
+        return 1
+
+    # Get runtime environment
+    runtime_dir = Path(get_str_env("GEMINI_RUNTIME_DIR", "/tmp/claude-gemini"))
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    input_fifo = runtime_dir / "input.fifo"
+    output_fifo = runtime_dir / "output.fifo"
+
+    # Create FIFOs if they don't exist
+    if not input_fifo.exists():
+        os.mkfifo(str(input_fifo))
+    if not output_fifo.exists():
+        os.mkfifo(str(output_fifo))
+
+    # Build request payload
+    payload = {
+        "content": message,
+        "marker": _generate_marker(),
+        "timestamp": "",
+        "output_to_file": str(output_path) if output_path else None,
+    }
+
+    # Write request to input FIFO
+    try:
+        # Open FIFO for writing, will block until reader opens it
+        fifo_fd = os.open(str(input_fifo), os.O_WRONLY)
+
+        # Write the request
+        with os.fdopen(fifo_fd, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            f.flush()
+
+        print(f"Request sent to Gemini bridge, marker: {payload['marker']}", file=sys.stderr)
+
+        # If output path specified, read response from output FIFO
+        if output_path:
+            print(f"Waiting for response (will write to {output_path})...", file=sys.stderr)
+
+            # Open output FIFO for reading, will block until writer opens it
+            out_fd = os.open(str(output_fifo), os.O_RDONLY)
+
+            with os.fdopen(out_fd, 'r', encoding='utf-8') as f:
+                response_text = f.read()
+
+            # Parse and write response to output file
+            try:
+                response = json.loads(response_text)
+                reply = response.get("reply", "")
+                error = response.get("error", "")
+                marker = response.get("marker", "")
+
+                if error:
+                    print(f"Error: {error}", file=sys.stderr)
+                    return 1
+
+                print(f"Received reply (marker: {marker})", file=sys.stderr)
+
+                # Write to output file
+                with open(output_path, 'w', encoding='utf-8') as out_f:
+                    out_f.write(reply)
+
+                print(f"Response written to {output_path}", file=sys.stderr)
+                return 0
+
+            except json.JSONDecodeError as e:
+                print(f"Error parsing response: {e}", file=sys.stderr)
+                print(f"Raw response: {response_text}", file=sys.stderr)
+                return 1
+
+        else:
+            print("Request sent successfully (no output file specified)", file=sys.stderr)
+            return 0
+
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

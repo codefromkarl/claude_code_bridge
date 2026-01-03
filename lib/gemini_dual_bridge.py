@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Codex dual-window bridge
-Sends commands to Codex, supports tmux and WezTerm.
+Gemini dual-window bridge
+Sends commands to Gemini CLI via terminal session.
+Based on codex_dual_bridge.py architecture.
 """
 
 from __future__ import annotations
@@ -30,8 +31,8 @@ def _env_float(name: str, default: float) -> float:
     return max(0.0, value)
 
 
-class TerminalCodexSession:
-    """Inject commands to Codex CLI via terminal session"""
+class TerminalGeminiSession:
+    """Inject commands to Gemini CLI via terminal session"""
 
     def __init__(self, terminal_type: str, pane_id: str):
         self.terminal_type = terminal_type
@@ -39,13 +40,14 @@ class TerminalCodexSession:
         self.backend = WeztermBackend() if terminal_type == "wezterm" else TmuxBackend()
 
     def send(self, text: str) -> None:
+        """Send text to Gemini terminal"""
         command = text.replace("\r", " ").replace("\n", " ").strip()
         if command:
             self.backend.send_text(self.pane_id, command)
 
 
 class DualBridge:
-    """Claude ↔ Codex bridge main process"""
+    """Claude ↔ Gemini bridge main process"""
 
     def __init__(self, runtime_dir: Path, session_id: str):
         self.runtime_dir = runtime_dir
@@ -56,12 +58,14 @@ class DualBridge:
         self.bridge_log = self.runtime_dir / "bridge.log"
         self.history_dir.mkdir(parents=True, exist_ok=True)
 
-        terminal_type = os.environ.get("CODEX_TERMINAL", "tmux")
-        pane_id = os.environ.get("CODEX_WEZTERM_PANE") if terminal_type == "wezterm" else os.environ.get("CODEX_TMUX_SESSION")
-        if not pane_id:
-            raise RuntimeError(f"Missing {'CODEX_WEZTERM_PANE' if terminal_type == 'wezterm' else 'CODEX_TMUX_SESSION'} environment variable")
+        terminal_type = os.environ.get("GEMINI_TERMINAL", "tmux")
+        pane_id = os.environ.get("GEMINI_TMUX_SESSION", "") if terminal_type == "tmux" else \
+                 os.environ.get("GEMINI_WEZTERM_PANE", "") if terminal_type == "wezterm" else ""
 
-        self.codex_session = TerminalCodexSession(terminal_type, pane_id)
+        if not pane_id:
+            raise RuntimeError(f"Missing GEMINI_TMUX_SESSION/GEMINI_WEZTERM_PANE environment variable for terminal type '{terminal_type}'")
+
+        self.gemini_session = TerminalGeminiSession(terminal_type, pane_id)
         self._running = True
         signal.signal(signal.SIGTERM, self._handle_signal)
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -71,11 +75,12 @@ class DualBridge:
         self._log_console(f"⚠️ Received signal {signum}, exiting...")
 
     def run(self) -> int:
-        self._log_console("🔌 Codex bridge started, waiting for Claude commands...")
+        self._log_console("🔌 Gemini bridge started, waiting for Claude commands...")
         idle_sleep = _env_float("CCB_BRIDGE_IDLE_SLEEP", 0.05)
         error_backoff_min = _env_float("CCB_BRIDGE_ERROR_BACKOFF_MIN", 0.05)
         error_backoff_max = _env_float("CCB_BRIDGE_ERROR_BACKOFF_MAX", 0.2)
         error_backoff = max(0.0, min(error_backoff_min, error_backoff_max))
+
         while self._running:
             try:
                 payload = self._read_request()
@@ -83,6 +88,7 @@ class DualBridge:
                     if idle_sleep:
                         time.sleep(idle_sleep)
                     continue
+
                 self._process_request(payload)
                 error_backoff = max(0.0, min(error_backoff_min, error_backoff_max))
             except KeyboardInterrupt:
@@ -95,7 +101,7 @@ class DualBridge:
                 if error_backoff_max:
                     error_backoff = min(error_backoff_max, max(error_backoff_min, error_backoff * 2))
 
-        self._log_console("👋 Codex bridge exited")
+        self._log_console("👋 Gemini bridge exited")
         return 0
 
     def _read_request(self) -> Optional[Dict[str, Any]]:
@@ -113,27 +119,27 @@ class DualBridge:
     def _process_request(self, payload: Dict[str, Any]) -> None:
         content = payload.get("content", "")
         marker = payload.get("marker") or self._generate_marker()
-
         timestamp = self._timestamp()
+
         self._log_bridge(json.dumps({"marker": marker, "question": content, "time": timestamp}, ensure_ascii=False))
         self._append_history("claude", content, marker)
 
         try:
             if mailbox_enabled() and len(content) > mailbox_threshold():
                 if not self._send_via_file(content):
-                    self.codex_session.send(content)
+                    self.gemini_session.send(content)
             else:
-                self.codex_session.send(content)
+                self.gemini_session.send(content)
         except Exception as exc:
-            msg = f"❌ Failed to send to Codex: {exc}"
-            self._append_history("codex", msg, marker)
+            msg = f"❌ Failed to send to Gemini: {exc}"
+            self._append_history("gemini", msg, marker)
             self._log_console(msg)
 
     def _send_via_file(self, content: str) -> bool:
         try:
             path = write_mailbox_instruction(content)
             prompt = build_mailbox_prompt(path)
-            self.codex_session.send(prompt)
+            self.gemini_session.send(prompt)
             return True
         except Exception as exc:
             self._log_bridge(f"mailbox_send_failed: {exc}")
@@ -168,13 +174,9 @@ class DualBridge:
     def _generate_marker() -> str:
         return f"ask-{int(time.time())}-{os.getpid()}"
 
-    @staticmethod
-    def _log_console(message: str) -> None:
-        print(message, flush=True)
-
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Claude-Codex bridge")
+    parser = argparse.ArgumentParser(description="Claude-Gemini bridge")
     parser.add_argument("--runtime-dir", required=True, help="Runtime directory")
     parser.add_argument("--session-id", required=True, help="Session ID")
     return parser.parse_args()

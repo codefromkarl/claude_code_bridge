@@ -15,6 +15,8 @@ from compat import setup_windows_encoding
 setup_windows_encoding()
 
 from i18n import t
+from task_utils import get_latest_task_output
+from ccb_config import send_notification
 
 try:
     from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
@@ -94,6 +96,10 @@ def main(argv: list[str]) -> int:
                 print(f"A: {reply}")
                 if i < len(conversations) - 1:
                     print("---")
+            task_out = get_latest_task_output()
+            if task_out:
+                print("\n[Task Output]")
+                print(task_out)
             return EXIT_OK
 
         message = reader.latest_message()
@@ -101,6 +107,11 @@ def main(argv: list[str]) -> int:
             print(t("no_reply_available", provider="Codex"), file=sys.stderr)
             return EXIT_NO_REPLY
         print(message)
+        send_notification("CCB: Codex Reply", message[:100] + ("..." if len(message) > 100 else ""))
+        task_out = get_latest_task_output()
+        if task_out:
+            print("\n[Task Output]")
+            print(task_out)
         return EXIT_OK
     except Exception as exc:
         if _debug_enabled():

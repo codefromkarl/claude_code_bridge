@@ -15,6 +15,7 @@ from compat import setup_windows_encoding
 setup_windows_encoding()
 
 from i18n import t
+from ccb_config import send_notification
 
 try:
     from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK
@@ -40,6 +41,7 @@ def main(argv: list[str]) -> int:
             print(t("no_reply_available", provider="OpenCode"), file=sys.stderr)
             return EXIT_NO_REPLY
         print(message)
+        send_notification("CCB: OpenCode Reply", message[:100] + ("..." if len(message) > 100 else ""))
         return EXIT_OK
     except Exception as exc:
         if _debug_enabled():

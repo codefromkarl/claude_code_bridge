@@ -125,6 +125,20 @@ ccb update              # Update ccb to the latest version
 
 ---
 
+## 🏎️ Performance Flags (Linux)
+
+These are safe, opt-in toggles (default off):
+
+- `CCB_INOTIFY=1`: Use Linux inotify events for log watching (Codex/Gemini/OpenCode readers). Falls back to adaptive polling when unavailable/unreliable.
+- `CCB_TMUX_PERSIST=1`: Keep a persistent `tmux -C` control-mode client to avoid per-send process spawning (tmux backend only).
+- `CCB_TMUX_TMPDIR=/path`: Override where tmux paste temp files are written (Linux default prefers `/dev/shm/ccb`).
+
+Quick benchmark (requires an existing tmux target):
+```bash
+python3 bin/bench_tmux_send.py --target <tmux-session-or-pane> -n 500
+python3 bin/bench_tmux_send.py --target <tmux-session-or-pane> -n 500 --persist
+```
+
 ## 🪟 Windows Installation Guide (WSL vs Native)
 
 > **Key Point:** `ccb/cask-w/cping` must run in the **same environment** as `codex/gemini`. The most common issue is environment mismatch causing `cping` to fail.

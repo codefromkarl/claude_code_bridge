@@ -123,6 +123,20 @@ ccb update              # 更新 ccb 到最新版本
 
 ---
 
+## 🏎️ 性能开关（Linux）
+
+以下为安全的可选开关（默认关闭）：
+
+- `CCB_INOTIFY=1`：使用 Linux inotify 事件监听日志变化（Codex/Gemini/OpenCode），不可用/不可靠时自动回退到自适应轮询。
+- `CCB_TMUX_PERSIST=1`：保持持久 `tmux -C` 控制模式连接，避免每次发送都新建 tmux 进程（仅 tmux 后端）。
+- `CCB_TMUX_TMPDIR=/path`：覆盖 tmux 粘贴临时文件目录（Linux 默认优先 `/dev/shm/ccb`）。
+
+快速基准测试（需要已有 tmux 目标）：
+```bash
+python3 bin/bench_tmux_send.py --target <tmux-session-or-pane> -n 500
+python3 bin/bench_tmux_send.py --target <tmux-session-or-pane> -n 500 --persist
+```
+
 ## 🪟 Windows 安装指南（WSL vs 原生）
 
 > 结论先说：`ccb/cask-w/cping` 必须和 `codex/gemini` 跑在**同一个环境**（WSL 就都在 WSL，原生 Windows 就都在原生 Windows）。最常见问题就是装错环境导致 `cping` 不通。
