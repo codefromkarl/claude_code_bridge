@@ -21,6 +21,21 @@ setup_windows_encoding()
 
 from cli_output import EXIT_ERROR, EXIT_NO_REPLY, EXIT_OK, atomic_write_text
 
+COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "--- EXECUTION COMPLETE ---").strip() or "--- EXECUTION COMPLETE ---"
+
+
+def _with_completion_marker_request(message: str) -> str:
+    if not message:
+        return message
+    if COMPLETION_MARKER in message:
+        return message
+    return (
+        f"{message}\n\n"
+        "IMPORTANT:\n"
+        "- You MUST reply with a final response (do not stay silent).\n"
+        f"- End your reply with this exact line (verbatim):\n{COMPLETION_MARKER}\n"
+    )
+
 
 def _check_background_mode() -> bool:
     """Return True when stdout looks like Claude Code run_in_background output capture."""
@@ -113,8 +128,7 @@ def main(argv: list[str]) -> int:
         if not healthy:
             raise RuntimeError(f"[ERROR] Session error: {status}")
 
-        _, state = comm._send_message(message)
-        print("CCB_END_TURN", file=sys.stderr)
+        _, state = comm._send_message(_with_completion_marker_request(message))
         reply, _ = comm.log_reader.wait_for_message(state, timeout)
         if not reply:
             if not quiet:

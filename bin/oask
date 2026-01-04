@@ -19,6 +19,21 @@ from compat import setup_windows_encoding
 
 setup_windows_encoding()
 
+COMPLETION_MARKER = (os.environ.get("CCB_EXECUTION_COMPLETE_MARKER") or "--- EXECUTION COMPLETE ---").strip() or "--- EXECUTION COMPLETE ---"
+
+
+def _with_completion_marker_request(message: str) -> str:
+    if not message:
+        return message
+    if COMPLETION_MARKER in message:
+        return message
+    return (
+        f"{message}\n\n"
+        "IMPORTANT:\n"
+        "- You MUST reply with a final response (do not stay silent).\n"
+        f"- End your reply with this exact line (verbatim):\n{COMPLETION_MARKER}\n"
+    )
+
 
 def _usage() -> None:
     print("Usage: oask [--timeout SECONDS] [--output FILE] <message>", file=sys.stderr)
@@ -102,8 +117,7 @@ def main(argv: list[str]) -> int:
         if not healthy:
             raise RuntimeError(f"[ERROR] Session error: {status}")
 
-        _, state = comm._send_message(message)
-        print("CCB_END_TURN", file=sys.stderr)
+        _, state = comm._send_message(_with_completion_marker_request(message))
         reply, _ = comm.log_reader.wait_for_message(state, timeout)
         if not reply:
             if not quiet:
@@ -127,4 +141,3 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv))
-

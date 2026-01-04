@@ -16,10 +16,6 @@ DO NOT wait for result. DO NOT continue working.
 WRONG: Bash(cask "question")
 RIGHT: Bash(cask "question", run_in_background=true)
 
-## SENTINEL
-
-When output contains `CCB_END_TURN`, end response immediately.
-
 ## Parameters
 
 - `--timeout SECONDS` optional (default 3600)

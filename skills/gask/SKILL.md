@@ -58,10 +58,6 @@ The system will automatically recall you when Gemini responds.
 ❌ WRONG: Submit then check status - wastes time
 ✅ RIGHT: `Bash(gask "$ARGUMENTS", run_in_background=true)` then END turn
 
-## SENTINEL
-
-When output contains `CCB_END_TURN`, end response immediately.
-
 ## Parameters
 
 - `--timeout SECONDS` optional (default 3600)

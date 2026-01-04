@@ -321,84 +321,38 @@ function Install-ClaudeConfig {
 
   $codexRules = @"
 <!-- CCB_CONFIG_START -->
-## Codex Collaboration Rules
-Codex is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with Codex:
+## Collaboration Rules (Codex / Gemini / OpenCode)
+Codex, Gemini, and OpenCode are other AI assistants running in separate terminal sessions (WezTerm, iTerm2, or tmux).
+
+### Common Rules (all assistants)
+Trigger (any match):
+- User explicitly asks to consult one of them (e.g. "ask codex ...", "let gemini ...")
+- User uses an assistant prefix (see table)
+- User asks about that assistant's status (e.g. "is codex alive?")
 
 Fast path (minimize latency):
-- If the user message starts with any of: ``@codex``, ``codex:``, ``ask codex``, ``let codex``, ``/cask`` then immediately run based on complexity.
-- If user message is only the prefix (no content), ask a 1-line clarification for what to send.
+- If the user message starts with a prefix: treat the rest as the question and dispatch immediately.
+- If the user message is only the prefix (no question): ask a 1-line clarification for what to send.
 
-Trigger conditions (any match):
-- User mentions codex/Codex with questioning/requesting tone
-- User wants codex to do something, give advice, or help review
-- User asks about codex's status or previous reply
+Actions:
+- Ask a question (default) -> ``Bash(ASK_CMD "<question>", run_in_background=true)``, tell user "ASSISTANT processing (task: xxx)", then END your turn
+- Check connectivity -> run ``PING_CMD``
+- Use blocking/wait or "show previous reply" commands ONLY if the user explicitly requests them
 
-Command selection (choose based on task complexity):
-- Simple questions (quick lookup, short answer, simple check) -> ``cask-w "<question>"``
-  - Examples: "what's the syntax for X", "is Y correct", "quick check on Z"
-  - Blocks until reply, then continue
-- Complex tasks (review, analysis, multi-step, code generation) -> ``Bash(cask "<question>", run_in_background=true)``
-  - Examples: "review this code", "analyze the architecture", "help design X"
-  - Tell user "Codex processing (task: xxx)" then END your turn
-  - When bash-notification arrives, show the task output
-- Check connectivity -> ``cping``
-- View previous reply -> ``cpend`` / ``cpend N``
+Important restrictions:
+- After starting a background ask, do NOT poll for results; wait for ``bash-notification``
+- Do NOT use ``*-w`` / ``*pend`` / ``*end`` unless the user explicitly requests
+
+### Command Map
+| Assistant | Prefixes | ASK_CMD (background) | PING_CMD | Explicit-request-only |
+|---|---|---|---|---|
+| Codex | ``@codex``, ``codex:``, ``ask codex``, ``let codex``, ``/cask`` | ``cask`` | ``cping`` | ``cask-w``, ``cpend`` |
+| Gemini | ``@gemini``, ``gemini:``, ``ask gemini``, ``let gemini``, ``/gask`` | ``gask`` | ``gping`` | ``gask-w``, ``gpend`` |
+| OpenCode | ``@opencode``, ``opencode:``, ``ask opencode``, ``let opencode``, ``/oask`` | ``oask`` | ``oping`` | ``oask-w``, ``opend`` |
 
 Examples:
-- "codex: what's the git command for X" -> ``cask-w "..."`` (simple, wait for reply)
-- "ask codex to review this PR" -> ``Bash(cask "...", run_in_background=true)``, END turn (complex)
-- "is codex alive" -> cping
-- "view codex reply" -> cpend
-
-## Gemini Collaboration Rules
-Gemini is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with Gemini:
-
-Fast path (minimize latency):
-- If the user message starts with any of: ``@gemini``, ``gemini:``, ``ask gemini``, ``let gemini``, ``/gask`` then immediately run based on complexity.
-- If user message is only the prefix (no content), ask a 1-line clarification for what to send.
-
-Trigger conditions (any match):
-- User mentions gemini/Gemini with questioning/requesting tone
-- User wants gemini to do something, give advice, or help review
-- User asks about gemini's status or previous reply
-
-Command selection (choose based on task complexity):
-- Simple questions (quick lookup, short answer, simple check) -> ``gask-w "<question>"``
-  - Examples: "what's the syntax for X", "is Y correct", "quick check on Z"
-  - Blocks until reply, then continue
-- Complex tasks (review, analysis, multi-step, code generation) -> ``Bash(gask "<question>", run_in_background=true)``
-  - Examples: "review this code", "analyze the architecture", "help design X"
-  - Tell user "Gemini processing (task: xxx)" then END your turn
-  - When bash-notification arrives, show the task output
-- Check connectivity -> ``gping``
-- View previous reply -> ``gpend`` / ``gpend N``
-
-Examples:
-- "gemini: what's the best practice for X" -> ``gask-w "..."`` (simple, wait for reply)
-- "ask gemini to review this design" -> ``Bash(gask "...", run_in_background=true)``, END turn (complex)
-- "is gemini alive" -> gping
-- "view gemini reply" -> gpend
-
-## OpenCode Collaboration Rules
-OpenCode is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with OpenCode:
-
-Fast path (minimize latency):
-- If the user message starts with any of: ``@opencode``, ``opencode:``, ``ask opencode``, ``let opencode``, ``/oask`` then immediately run based on complexity.
-- If user message is only the prefix (no content), ask a 1-line clarification for what to send.
-
-Trigger conditions (any match):
-- User mentions opencode/OpenCode with questioning/requesting tone
-- User wants opencode to do something, give advice, or help review
-- User asks about opencode's status or previous reply
-
-Command selection:
-- Send question -> ``Bash(oask "<question>", run_in_background=true)``, tell user "OpenCode processing (task: xxx)" then END your turn
-- Check connectivity -> ``oping``
-
-IMPORTANT RESTRICTIONS:
-- NEVER use opend/oask-w unless user EXPLICITLY requests
-- After oask, ONLY wait for bash-notification to get results
-- Do NOT try to fetch results yourself
+- ``codex: review this code`` -> ``Bash(cask "...", run_in_background=true)``, END turn
+- ``is gemini alive?`` -> ``gping``
 <!-- CCB_CONFIG_END -->
 "@
 

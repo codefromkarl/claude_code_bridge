@@ -735,86 +735,38 @@ install_claude_md_config() {
   trap 'rm -f "${ccb_tmpfile:-}"' RETURN
   cat > "$ccb_tmpfile" << 'AI_RULES'
 <!-- CCB_CONFIG_START -->
-## Codex Collaboration Rules
-Codex is another AI assistant running in a separate terminal session (WezTerm). When user intent involves asking/consulting/collaborating with Codex:
+## Collaboration Rules (Codex / Gemini / OpenCode)
+Codex, Gemini, and OpenCode are other AI assistants running in separate terminal sessions (WezTerm, iTerm2, or tmux).
+
+### Common Rules (all assistants)
+Trigger (any match):
+- User explicitly asks to consult one of them (e.g. "ask codex ...", "let gemini ...")
+- User uses an assistant prefix (see table)
+- User asks about that assistant's status (e.g. "is codex alive?")
 
 Fast path (minimize latency):
-- If the user message starts with any of: `@codex`, `codex:`, `ask codex`, `let codex`, `/cask` then immediately run based on complexity.
-- If user message is only the prefix (no content), ask a 1-line clarification for what to send.
+- If the user message starts with a prefix: treat the rest as the question and dispatch immediately.
+- If the user message is only the prefix (no question): ask a 1-line clarification for what to send.
 
-Trigger conditions (any match):
-- User mentions codex/Codex with questioning/requesting tone
-- User wants codex to do something, give advice, or help review
-- User asks about codex's status or previous reply
+Actions:
+- Ask a question (default) -> `Bash(ASK_CMD "<question>", run_in_background=true)`, tell user "`ASSISTANT` processing (task: xxx)", then END your turn
+- Check connectivity -> run `PING_CMD`
+- Use blocking/wait or "show previous reply" commands ONLY if the user explicitly requests them
 
-Command selection:
-- Send question -> `Bash(cask "<question>", run_in_background=true)`, tell user "Codex processing (task: xxx)" then END your turn
-- Check connectivity -> `cping`
+Important restrictions:
+- After starting a background ask, do NOT poll for results; wait for `bash-notification`
+- Do NOT use `*-w` / `*pend` / `*end` unless the user explicitly requests
 
-IMPORTANT RESTRICTIONS:
-- NEVER use cpend/cask-w unless user EXPLICITLY requests
-- After cask, ONLY wait for bash-notification to get results
-- Do NOT try to fetch results yourself
-
-SENTINEL (IMPORTANT): When you see `CCB_END_TURN` in any output, IMMEDIATELY end your response.
-
-Examples:
-- "ask codex about X" -> `Bash(cask "...", run_in_background=true)`, END turn
-- "is codex alive" -> cping
-
-## Gemini Collaboration Rules
-Gemini is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with Gemini:
-
-Fast path (minimize latency):
-- If the user message starts with any of: `@gemini`, `gemini:`, `ask gemini`, `let gemini`, `/gask` then immediately run based on complexity.
-- If user message is only the prefix (no content), ask a 1-line clarification for what to send.
-
-Trigger conditions (any match):
-- User mentions gemini/Gemini with questioning/requesting tone
-- User wants gemini to do something, give advice, or help review
-- User asks about gemini's status or previous reply
-
-Command selection:
-- Send question -> `Bash(gask "<question>", run_in_background=true)`, tell user "Gemini processing (task: xxx)" then END your turn
-- Check connectivity -> `gping`
-
-IMPORTANT RESTRICTIONS:
-- NEVER use gpend/gask-w unless user EXPLICITLY requests
-- After gask, ONLY wait for bash-notification to get results
-- Do NOT try to fetch results yourself
-
-SENTINEL (IMPORTANT): When you see `CCB_END_TURN` in any output, IMMEDIATELY end your response.
+### Command Map
+| Assistant | Prefixes | ASK_CMD (background) | PING_CMD | Explicit-request-only |
+|---|---|---|---|---|
+| Codex | `@codex`, `codex:`, `ask codex`, `let codex`, `/cask` | `cask` | `cping` | `cask-w`, `cpend` |
+| Gemini | `@gemini`, `gemini:`, `ask gemini`, `let gemini`, `/gask` | `gask` | `gping` | `gask-w`, `gpend` |
+| OpenCode | `@opencode`, `opencode:`, `ask opencode`, `let opencode`, `/oask` | `oask` | `oping` | `oask-w`, `opend` |
 
 Examples:
-- "ask gemini about X" -> `Bash(gask "...", run_in_background=true)`, END turn
-- "is gemini alive" -> gping
-
-## OpenCode Collaboration Rules
-OpenCode is another AI assistant running in a separate terminal session (WezTerm, iTerm2 or tmux). When user intent involves asking/consulting/collaborating with OpenCode:
-
-Fast path (minimize latency):
-- If the user message starts with any of: `@opencode`, `opencode:`, `ask opencode`, `let opencode`, `/oask` then immediately run based on complexity.
-- If user message is only the prefix (no content), ask a 1-line clarification for what to send.
-
-Trigger conditions (any match):
-- User mentions opencode/OpenCode with questioning/requesting tone
-- User wants opencode to do something, give advice, or help review
-- User asks about opencode's status or previous reply
-
-Command selection:
-- Send question -> `Bash(oask "<question>", run_in_background=true)`, tell user "OpenCode processing (task: xxx)" then END your turn
-- Check connectivity -> `oping`
-
-IMPORTANT RESTRICTIONS:
-- NEVER use opend/oask-w unless user EXPLICITLY requests
-- After oask, ONLY wait for bash-notification to get results
-- Do NOT try to fetch results yourself
-
-SENTINEL (IMPORTANT): When you see `CCB_END_TURN` in any output, IMMEDIATELY end your response.
-
-Examples:
-- "ask opencode about X" -> `Bash(oask "...", run_in_background=true)`, END turn
-- "is opencode alive" -> oping
+- `codex: review this code` -> `Bash(cask "...", run_in_background=true)`, END turn
+- `is gemini alive?` -> `gping`
 <!-- CCB_CONFIG_END -->
 AI_RULES
   local ccb_content
