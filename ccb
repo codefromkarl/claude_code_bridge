@@ -878,6 +878,20 @@ BRIDGE_PID=$!
 echo $BRIDGE_PID > "$RUNTIME_DIR/bridge.pid"
 
 trap 'kill -TERM "$BRIDGE_PID" 2>/dev/null' EXIT
+
+# When launched via "pure tmux" mode (no external terminal available), this wrapper runs
+# *inside* a detached tmux session. Calling `tmux attach` from within tmux may exit
+# immediately ("sessions should be nested with care"), which breaks warmup (`cping`)
+# because the PID recorded in codex.pid dies.
+#
+# Keep the wrapper (and bridge) alive in that case; users can attach manually.
+if [ -n "$TMUX" ]; then
+    while tmux has-session -t "$TMUX_SESSION" 2>/dev/null; do
+        sleep 3600
+    done
+    exit 0
+fi
+
 exec tmux attach -t "$TMUX_SESSION"
 '''
         script_file = runtime / "wrapper.sh"
